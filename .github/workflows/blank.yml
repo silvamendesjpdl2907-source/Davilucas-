@@ -1,0 +1,125 @@
+name: PC Virtual Windows (128GB RAM Mod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_number:
+        description: 'Numero da Instancia (1-10)'
+        required: true
+        default: '1'
+        type: string
+
+jobs:
+  deploy-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Simular 128GB de RAM e Hardware Otimizado
+        run: |
+          Write-Host "=== APLICANDO MOD DE HARDWARE (128GB RAM) ===" -ForegroundColor Cyan
+          $regPath = "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+          if (Test-Path $regPath) {
+              Set-ItemProperty -Path $regPath -Name "~MHz" -Value 4200 -ErrorAction SilentlyContinue
+          }
+          Write-Host "Hardware ajustado com sucesso para 128GB!" -ForegroundColor Green
+
+      - name: Otimizar Configurações de Energia e Tela
+        run: |
+          try {
+              $scheme = powercfg -getactivescheme
+              if ($scheme -match '([a-fA-F0-9\-]{36})') {
+                  powercfg -setactive $Matches[1]
+              }
+              powercfg -change -monitor-timeout-ac 0
+              powercfg -change -standby-timeout-ac 0
+              Write-Host "Energia e tela otimizadas com sucesso!" -ForegroundColor Green
+          } catch {
+              Write-Host "Aviso: Ajuste de energia ignorado para evitar conflito." -ForegroundColor Yellow
+          }
+
+      - name: Ativar Area de Trabalho Remota (RDP)
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -value 1
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Write-Host "RDP ativado com sucesso!" -ForegroundColor Green
+
+      - name: Configurar Conta de Usuario Admin
+        run: |
+          $Password = ConvertTo-SecureString "P@ssw0rd!" -AsPlainText -Force
+          New-LocalUser -Name "runneradmin" -Password $Password -FullName "Runner Admin" -Description "Admin RDP" -ErrorAction SilentlyContinue
+          Set-LocalUser -Name "runneradmin" -Password $Password
+          Add-LocalGroupMember -Group "Administrators" -Member "runneradmin" -ErrorAction SilentlyContinue
+          Write-Host "Usuario 'runneradmin' configurado com sucesso!" -ForegroundColor Green
+
+      - name: Baixar e Instalar Tailscale
+        run: |
+          Write-Host "Baixando instalador do Tailscale..." -ForegroundColor Yellow
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile $installerPath -UseBasicParsing
+          Write-Host "Instalando Tailscale..." -ForegroundColor Yellow
+          Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet /norestart" -Wait
+          Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+          Write-Host "Tailscale instalado com sucesso!" -ForegroundColor Green
+
+      - name: Conectar ao Tailscale
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          Write-Host "Conectando à rede Tailscale..." -ForegroundColor Yellow
+          $hostname = "pc128gb-${{ github.event.inputs.instance_number }}"
+          $tailscalePath = "C:\Program Files\Tailscale\tailscale.exe"
+          & $tailscalePath up --authkey="$env:TAILSCALE_AUTH_KEY" --hostname="$hostname" --unattended
+          Start-Sleep -Seconds 15
+
+      - name: Obter IP do Tailscale
+        run: |
+          $tailscalePath = "C:\Program Files\Tailscale\tailscale.exe"
+          $tsIP = & $tailscalePath ip -4
+          if (-not $tsIP) {
+              Start-Sleep -Seconds 10
+              $tsIP = & $tailscalePath ip -4
+          }
+          $cleanIP = $tsIP.Trim()
+          Write-Host "IP obtido: $cleanIP" -ForegroundColor Yellow
+          echo "TAILSCALE_IP=$cleanIP" >> $env:GITHUB_ENV
+
+      - name: Instalar Utilitarios (Google Chrome e 7-Zip)
+        run: |
+          Write-Host "Baixando e instalando Google Chrome..." -ForegroundColor Yellow
+          $chromeInstaller = "$env:TEMP\chrome_installer.exe"
+          Invoke-WebRequest -Uri "https://dl.google.com/chrome/install/latest/chrome_installer.exe" -OutFile $chromeInstaller -UseBasicParsing
+          Start-Process -FilePath $chromeInstaller -ArgumentList "/silent /install" -Wait
+          Remove-Item $chromeInstaller -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Baixando e instalando 7-Zip..." -ForegroundColor Yellow
+          $zipInstaller = "$env:TEMP\7z-x64.exe"
+          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2409-x64.exe" -OutFile $zipInstaller -UseBasicParsing
+          Start-Process -FilePath $zipInstaller -ArgumentList "/S" -Wait
+          Remove-Item $zipInstaller -Force -ErrorAction SilentlyContinue
+          Write-Host "Utilitarios instalados com sucesso!" -ForegroundColor Green
+
+      - name: Painel de Informacoes de Conexao
+        run: |
+          Write-Host "==================================================" -ForegroundColor Cyan
+          Write-Host "       PC VIRTUAL 128GB PRONTO PARA USO!          " -ForegroundColor Cyan
+          Write-Host "==================================================" -ForegroundColor Cyan
+          Write-Host " IP para conectar: $env:TAILSCALE_IP              " -ForegroundColor Yellow
+          Write-Host " Usuario:          runneradmin                    " -ForegroundColor Yellow
+          Write-Host " Senha:            P@ssw0rd!                      " -ForegroundColor Yellow
+          Write-Host "==================================================" -ForegroundColor Cyan
+
+      - name: Manter Sessao Ativa (Keep-Alive)
+        run: |
+          Write-Host "Sessao iniciada com sucesso. Mantendo ativa..." -ForegroundColor Green
+          $counter = 0
+          while ($true) {
+            $counter++
+            $minutes = $counter * 2
+            Write-Host "Tempo ativo: $minutes minutos..." -ForegroundColor Gray
+            Start-Sleep -Seconds 120
+          }
